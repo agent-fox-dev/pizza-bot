@@ -12,6 +12,7 @@ import type { RunnableConfig } from "@langchain/core/runnables";
 import { isCommand } from "@langchain/langgraph";
 import { SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY } from "deepagents";
 import type { EvalWorkerData, HostToWorker, WorkerToHost } from "./eval-worker-protocol.js";
+import { asResponseFormat } from "./structured-response-middleware.js";
 
 export interface SandboxOptions {
   ptc: string[];
@@ -206,7 +207,7 @@ export async function createWorkerCodeInterpreterMiddleware(
               ...session.config,
               configurable: {
                 ...session.config.configurable,
-                [SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY]: responseSchema,
+                [SUBAGENT_RESPONSE_FORMAT_CONFIG_KEY]: asResponseFormat(responseSchema),
               },
             };
       const content = unwrapToolEnvelope(

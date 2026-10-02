@@ -2,9 +2,7 @@
 import {
   createDeepAgent,
   createFilesystemMiddleware,
-  createSubAgent,
   registerHarnessProfile,
-  type CompiledSubAgent,
   type SubAgent,
 } from "deepagents";
 import {
@@ -35,6 +33,7 @@ import { buildBackend } from "./backend.js";
 import { toolErrorRecoveryMiddleware } from "./tool-error-middleware.js";
 import { outputTruncationMiddleware, truncatedTurnMiddleware } from "./output-truncation-middleware.js";
 import { subagentFinalizationMiddleware } from "./subagent-finalization-middleware.js";
+import { structuredResponseMiddleware } from "./structured-response-middleware.js";
 import { attachmentInlineMiddleware } from "./attachment-inline-middleware.js";
 import { currentDateTimeMiddleware } from "./current-date-time-middleware.js";
 import { localFolderContextMiddleware } from "./local-folder-context-middleware.js";
@@ -227,6 +226,7 @@ export async function resolveSkillSubagents(
       const middleware: unknown[] = [
         ...runLimitMiddleware(limits),
         subagentFinalizationMiddleware(AGENT_RUN_LIMITS.subagent.modelCalls),
+        structuredResponseMiddleware(),
         toolErrorRecoveryMiddleware(),
         outputTruncationMiddleware(),
         currentDateTimeMiddleware(),
@@ -340,26 +340,26 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
 
   const model = deps.model;
   const resolvedSubagents = await resolveSkillSubagents(deps.skills, deps);
-  const subagents = resolvedSubagents?.map((subagent): SubAgent | CompiledSubAgent => {
+  // Declarative, not compiled: DeepAgents rebuilds a declarative spec per call to
+  // apply an eval task()'s responseSchema, and rejects one for a compiled subagent.
+  const subagents = resolvedSubagents?.map((subagent): SubAgent => {
     if (!model) {
-      throw new Error("Pizza Bot requires a resolved model before compiling subagents.");
+      throw new Error("Pizza Bot requires a resolved model before building subagents.");
     }
     return {
-      name: subagent.name,
-      description: subagent.description,
-      // Compiled subagents bypass createDeepAgent's declarative filesystem/skills normalization.
-      runnable: createSubAgent({
-        ...subagent,
-        model,
-        tools: subagent.tools ?? [],
-        middleware: [
-          createFilesystemMiddleware({ backend }),
-          ...(subagent.middleware ?? []),
-        ],
-      }),
+      ...subagent,
+      model,
+      tools: subagent.tools ?? [],
+      middleware: [
+        createFilesystemMiddleware({ backend }),
+        ...(subagent.middleware ?? []),
+      ],
     };
   });
 
+  // The roster goes to this middleware alone, never to createDeepAgent: it replaces
+  // DeepAgents' own by name, so a roster given there would only gain upstream's
+  // default subagent middleware and be compiled for nothing.
   middleware.push(taskDispatchMiddleware({
     ...(model ? { model } : {}),
     subagents: subagents ?? [],
@@ -373,7 +373,6 @@ async function assemblePizzaBot(systemPrompt: string, deps: RuntimeDeps): Promis
     middleware,
   };
   if (model) params.model = model;
-  if (subagents?.length) params.subagents = subagents;
   if (deps.checkpointer) params.checkpointer = deps.checkpointer;
   if (deps.store) params.store = deps.store;
 
