@@ -27,6 +27,7 @@ import { PROTOCOL_VERSION } from "@pizza-bot/core";
 import { isAllowedRendererNavigation } from "./navigation-policy.js";
 import { handleSquirrelStartup, SQUIRREL_APP_ID } from "./squirrel-startup.js";
 import { resolveWindowIconPath } from "./window-icon.js";
+import { mergePath, readLoginShellPath } from "./login-shell-path.js";
 import {
   BoundedRetention,
   NATIVE_NOTIFICATION_CHANNELS,
@@ -161,6 +162,7 @@ app.on("second-instance", () => {
 void main();
 
 async function main(): Promise<void> {
+  const loginShellPath = readLoginShellPath();
   await app.whenReady();
   shellLogger.info("Desktop shell ready", {
     event: "desktop.ready",
@@ -241,6 +243,9 @@ async function main(): Promise<void> {
 
   const configured = initialConnection();
   if (configured.mode === "local") {
+    // Before any sidecar fork: the child, and every stdio MCP server it
+    // spawns, inherits this process's PATH.
+    await applyLoginShellPath(loginShellPath);
     try {
       const apiToken = localApiToken();
       sidecar = await bootSidecar(dataRoot, apiToken);
@@ -272,6 +277,19 @@ async function main(): Promise<void> {
       createWindow(activeConnection);
     }
   });
+}
+
+async function applyLoginShellPath(pending: Promise<string | undefined>): Promise<void> {
+  const shellPath = await pending;
+  if (!shellPath) {
+    if (process.platform !== "win32") {
+      shellLogger.warn("Could not read the login shell PATH; keeping the launch PATH", {
+        event: "desktop.login_shell_path_unavailable",
+      });
+    }
+    return;
+  }
+  process.env.PATH = mergePath(shellPath, process.env.PATH);
 }
 
 function initialConnection(): ActiveConnection | { mode: "local" } {
