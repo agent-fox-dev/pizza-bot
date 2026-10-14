@@ -13,7 +13,7 @@ import {
 import type { AgentHost } from "./agent-host.js";
 import { skillRoutes } from "./routes-skills.js";
 import { storedZip } from "./test-utils/stored-zip.js";
-import { MAX_SKILL_ARCHIVE_BYTES } from "./skill-import.js";
+import { MAX_SKILL_UPLOAD_BYTES } from "./skill-import.js";
 import { multipartRequestLimit } from "./request-limits.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -80,7 +80,7 @@ describe("skill routes", () => {
     const response = await app.request("/skills/import", {
       method: "POST",
       headers: {
-        "content-length": String(multipartRequestLimit(MAX_SKILL_ARCHIVE_BYTES) + 1),
+        "content-length": String(multipartRequestLimit(MAX_SKILL_UPLOAD_BYTES) + 1),
         "content-type": "multipart/form-data; boundary=test",
       },
       body: "--test--",
@@ -126,24 +126,65 @@ describe("skill routes", () => {
       .toEqual(png);
   });
 
-  it("does not overwrite an existing custom skill during import", async () => {
+  it.each(["zip", "md"])("does not overwrite an existing custom skill during %s import", async (extension) => {
     const { app, skillsDir } = await fixture();
     const dir = join(skillsDir, "review-change");
     await mkdir(dir);
     await writeFile(join(dir, "SKILL.md"), "original", "utf8");
     const form = new FormData();
+    const content = "---\nname: review-change\ndescription: Review a change.\n---\n\n# Review\n";
     form.set("file", new File([
-      storedZip([{
-        path: "review-change/SKILL.md",
-        content: "---\nname: review-change\ndescription: Review a change.\n---\n\n# Review\n",
-      }]),
-    ], "review-change.zip", { type: "application/zip" }));
+      extension === "zip" ? storedZip([{ path: "review-change/SKILL.md", content }]) : content,
+    ], `review-change.${extension}`));
 
     const response = await app.request("/skills/import", { method: "POST", body: form });
 
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ error: "already_exists" });
     expect(await readFile(join(dir, "SKILL.md"), "utf8")).toBe("original");
+  });
+
+  it.each([
+    { filename: "SKILL.md", type: "text/markdown" },
+    { filename: "different-name.md", type: "" },
+    { filename: "REVIEW.MD", type: "application/octet-stream" },
+  ])("imports $filename and reloads it into the catalog", async ({ filename, type }) => {
+    const { app, skillsDir } = await realPluginFixture();
+    await rm(skillsDir, { recursive: true });
+    const content = "---\nname: imported-review\ndescription: Review a change.\nlicense: MIT\n---\n\n# Review\n";
+    const form = new FormData();
+    form.set("file", new File([content], filename, { type }));
+
+    const response = await app.request("/skills/import", { method: "POST", body: form });
+
+    expect(response.status).toBe(201);
+    const imported = await response.json();
+    expect(imported).toMatchObject({
+      id: "imported-review",
+      name: "imported-review",
+      description: "Review a change.",
+      body: "# Review\n",
+      files: [],
+      source: "user",
+    });
+    expect(await readFile(join(skillsDir, "imported-review", "SKILL.md"), "utf8")).toBe(content);
+    const loaded = await app.request("/skills/imported-review");
+    expect(loaded.status).toBe(200);
+    expect(await loaded.json()).toEqual(imported);
+  });
+
+  it("returns Markdown validation details", async () => {
+    const { app } = await fixture();
+    const form = new FormData();
+    form.set("file", new File(["# No frontmatter"], "skill.md"));
+
+    const response = await app.request("/skills/import", { method: "POST", body: form });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: "invalid_skill_md",
+      detail: "SKILL.md frontmatter must include a name.",
+    });
   });
 
   it("creates recursive bundle files without flattening their paths", async () => {
