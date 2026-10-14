@@ -1,7 +1,7 @@
 /** YAML frontmatter splitting for Markdown-defined plugin contributions. */
 import { parse as parseYaml } from "yaml";
 
-const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
+const FRONTMATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 
 /** The parsed frontmatter mapping plus the Markdown body after the closing `---`. */
 export interface Frontmatter {

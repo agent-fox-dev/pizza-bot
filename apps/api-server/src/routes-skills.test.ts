@@ -173,6 +173,48 @@ describe("skill routes", () => {
     expect(await loaded.json()).toEqual(imported);
   });
 
+  it.each([
+    { extension: "md", newline: "\n" },
+    { extension: "md", newline: "\r\n" },
+    { extension: "zip", newline: "\n" },
+    { extension: "zip", newline: "\r\n" },
+  ])("loads a BOM-prefixed skill from $extension with newline $newline", async ({ extension, newline }) => {
+    const { app, skillsDir } = await realPluginFixture();
+    const body = `# Review${newline}${newline}Inspect the diff.${newline}`;
+    const content = "\uFEFF" + [
+      "---",
+      "name: bom-review",
+      "description: Review a change.",
+      "license: MIT",
+      "tools: [mcp:mcp-status:get_mcp_status]",
+      "interruptOn:",
+      "  mcp:mcp-status:get_mcp_status: true",
+      "---",
+      "",
+      body,
+    ].join(newline);
+    const form = new FormData();
+    form.set("file", new File([
+      extension === "zip" ? storedZip([{ path: "bom-review/SKILL.md", content }]) : content,
+    ], `review.${extension}`));
+
+    const response = await app.request("/skills/import", { method: "POST", body: form });
+
+    expect(response.status).toBe(201);
+    const imported = await response.json();
+    const loaded = await app.request("/skills/bom-review");
+    expect(loaded.status).toBe(200);
+    expect(await loaded.json()).toEqual(imported);
+    expect(imported).toMatchObject({
+      id: "bom-review",
+      description: "Review a change.",
+      body,
+      declaredTools: ["mcp:mcp-status:get_mcp_status"],
+      interruptOn: { "mcp:mcp-status:get_mcp_status": true },
+    });
+    expect(await readFile(join(skillsDir, "bom-review", "SKILL.md"))).toEqual(Buffer.from(content));
+  });
+
   it("returns Markdown validation details", async () => {
     const { app } = await fixture();
     const form = new FormData();
