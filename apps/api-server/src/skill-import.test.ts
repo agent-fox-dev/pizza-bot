@@ -172,7 +172,7 @@ const markdown = [
 ].join("\r\n");
 
 describe("parseSkillImport", () => {
-  it.each(["SKILL.md", "a-different-name.md", "REVIEW.MD"])(
+  it.each(["SKILL.md", "a-different-name.md", "REVIEW.MD", "skill.markdown", "REVIEW.MARKDOWN"])(
     "imports %s using its frontmatter name and preserves the original bytes",
     async (filename) => {
       const bytes = new TextEncoder().encode(markdown);

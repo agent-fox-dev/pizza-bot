@@ -53,10 +53,10 @@ export async function parseSkillImport(
     (bytes[2] === 0x07 && bytes[3] === 0x08)
   );
   if (zipSignature || name.endsWith(".zip")) return parseSkillArchive(bytes);
-  if (name.endsWith(".md")) {
+  if (name.endsWith(".md") || name.endsWith(".markdown")) {
     return parseSkillDefinition(bytes, [{ path: SKILL_MD, content: bytes }]);
   }
-  return new SkillImportError("unsupported_file", "Select a Markdown (.md) or ZIP (.zip) file to import.");
+  return new SkillImportError("unsupported_file", "Select a Markdown (.md, .markdown) or ZIP (.zip) file to import.");
 }
 
 export async function parseSkillArchive(bytes: Uint8Array): Promise<ImportedSkill | SkillImportError> {

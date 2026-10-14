@@ -148,6 +148,8 @@ describe("skill routes", () => {
     { filename: "SKILL.md", type: "text/markdown" },
     { filename: "different-name.md", type: "" },
     { filename: "REVIEW.MD", type: "application/octet-stream" },
+    { filename: "review.markdown", type: "text/markdown" },
+    { filename: "REVIEW.MARKDOWN", type: "" },
   ])("imports $filename and reloads it into the catalog", async ({ filename, type }) => {
     const { app, skillsDir } = await realPluginFixture();
     await rm(skillsDir, { recursive: true });
