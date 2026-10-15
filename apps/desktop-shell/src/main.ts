@@ -113,6 +113,7 @@ const shellLogger = configureLogging({
 installConsoleCapture(shellLogger.child({ component: "console" }));
 installProcessErrorHandlers(shellLogger.child({ component: "process" }));
 
+let loginShellPathApplied: Promise<void> = Promise.resolve();
 let sidecar: Sidecar | undefined;
 let mainWindow: BrowserWindow | undefined;
 let activeNotificationThreadId: string | null = null;
@@ -162,7 +163,7 @@ app.on("second-instance", () => {
 void main();
 
 async function main(): Promise<void> {
-  const loginShellPath = readLoginShellPath();
+  loginShellPathApplied = applyLoginShellPath(readLoginShellPath());
   await app.whenReady();
   shellLogger.info("Desktop shell ready", {
     event: "desktop.ready",
@@ -243,9 +244,6 @@ async function main(): Promise<void> {
 
   const configured = initialConnection();
   if (configured.mode === "local") {
-    // Before any sidecar fork: the child, and every stdio MCP server it
-    // spawns, inherits this process's PATH.
-    await applyLoginShellPath(loginShellPath);
     try {
       const apiToken = localApiToken();
       sidecar = await bootSidecar(dataRoot, apiToken);
@@ -396,6 +394,8 @@ function reportSidecarFatal(err: Error): void {
 
 /** Fork the sidecar with secrets decrypted from current storage. */
 async function bootSidecar(dataRoot: string, apiToken: string): Promise<Sidecar> {
+  // The child, and every stdio MCP server it spawns, inherits this process's PATH.
+  await loginShellPathApplied;
   const mcpNodePath = resolveMcpNodePath();
   return startSidecar({
     serverModulePath: resolveServerEntry(),
