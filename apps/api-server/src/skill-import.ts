@@ -1,4 +1,4 @@
-import { parseFrontmatter } from "@pizza-bot/plugin-sdk";
+import { splitFrontmatter } from "@pizza-bot/plugin-sdk";
 import {
   SKILL_MD,
   parseDeclaredTools,
@@ -89,13 +89,12 @@ export async function parseSkillArchive(bytes: Uint8Array): Promise<ImportedSkil
     return new SkillImportError("unsafe_path", `Archive file "${unsafeFile.path}" has an unsafe path.`);
   }
 
-  return parseSkillDefinition(skillMdFile.content, files, root);
+  return parseSkillDefinition(skillMdFile.content, files);
 }
 
 function parseSkillDefinition(
   bytes: Uint8Array,
   files: ImportedSkillFile[],
-  root = "",
 ): ImportedSkill | SkillImportError {
   let skillMd: string;
   try {
@@ -104,16 +103,25 @@ function parseSkillDefinition(
     return new SkillImportError("invalid_skill_md", `${SKILL_MD} must be valid UTF-8 text.`);
   }
 
-  const frontmatter = parseFrontmatter(skillMd);
+  const { data: frontmatter, error: yamlError } = splitFrontmatter(skillMd);
   const rawName = frontmatter.name;
   const rawDescription = frontmatter.description;
   if (typeof rawName !== "string" || rawName.length === 0) {
-    return new SkillImportError("invalid_skill_md", `${SKILL_MD} frontmatter must include a name.`);
+    return new SkillImportError(
+      "invalid_skill_md",
+      yamlError
+        ? `${SKILL_MD} frontmatter contains invalid YAML: ${yamlError}`
+        : `${SKILL_MD} frontmatter must include a name.`,
+    );
   }
   if (rawName !== rawName.trim() || rawName.length > 64 || !SKILL_NAME_RE.test(rawName)) {
+    const hyphenatedName = rawName.replaceAll("_", "-");
+    const suggestion = rawName.includes("_") && hyphenatedName.length <= 64 && SKILL_NAME_RE.test(hyphenatedName)
+      ? ` Try "${hyphenatedName}" instead.`
+      : "";
     return new SkillImportError(
       "invalid_skill_name",
-      "Skill name must be 1-64 lowercase letters, digits, or hyphens, with no leading, trailing, or consecutive hyphens.",
+      `Skill name must be 1-64 lowercase letters, digits, or hyphens, with no leading, trailing, or consecutive hyphens.${suggestion}`,
     );
   }
   if (typeof rawDescription !== "string" || rawDescription.trim().length === 0) {
@@ -126,18 +134,8 @@ function parseSkillDefinition(
   if (description.length > 1024) {
     return new SkillImportError(
       "invalid_skill_md",
-      `${SKILL_MD} description must be 1-1024 characters.`,
+      `${SKILL_MD} description must be 1-1024 characters; received ${description.length} characters.`,
     );
-  }
-
-  if (root) {
-    const directoryName = root.split("/").at(-1);
-    if (directoryName !== rawName) {
-      return new SkillImportError(
-        "name_mismatch",
-        `Skill directory "${directoryName}" must match the frontmatter name "${rawName}".`,
-      );
-    }
   }
 
   const { body } = splitSkillMd(skillMd);

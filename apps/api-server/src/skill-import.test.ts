@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SKILL_ARCHIVE_FILES,
   MAX_SKILL_UPLOAD_BYTES,
   SkillImportError,
   parseSkillArchive,
@@ -80,12 +81,12 @@ describe("parseSkillArchive", () => {
       code: "invalid_bundle",
     },
     {
-      label: "directory mismatch",
-      files: [{
-        path: "wrong/SKILL.md",
-        content: "---\nname: review-change\ndescription: Reviews changes.\n---\n\n# Review\n",
-      }],
-      code: "name_mismatch",
+      label: "second SKILL.md in a reference folder",
+      files: [
+        { path: "review-change/SKILL.md", content: "# Review" },
+        { path: "review-change/references/SKILL.md", content: "# Reference" },
+      ],
+      code: "invalid_bundle",
     },
     {
       label: "non-spec name",
@@ -111,6 +112,50 @@ describe("parseSkillArchive", () => {
     await expect(parseSkillArchive(zip([
       { path: "../SKILL.md", content: "unsafe" },
     ]))).resolves.toMatchObject({ code: "unsafe_path" });
+  });
+
+  it("imports a differently named directory using the frontmatter name", async () => {
+    const skill = await parseSkillArchive(zip([
+      { path: "export/8a14e7/SKILL.md", content: markdown },
+      { path: "export/8a14e7/references/checklist.md", content: "# Checklist" },
+    ]));
+    assertSkill(skill);
+    expect(skill.id).toBe("review-change");
+    expect(skill.files.map((file) => file.path)).toEqual(["SKILL.md", "references/checklist.md"]);
+  });
+
+  it.each([136, MAX_SKILL_ARCHIVE_FILES])("imports %i files while excluding Finder metadata and directories from the limit", async (fileCount) => {
+    const files = [
+      { path: "review-change/SKILL.md", content: markdown },
+      ...Array.from({ length: fileCount - 1 }, (_, index) => ({
+        path: `review-change/references/${index}.md`,
+        content: `Reference ${index}`,
+      })),
+    ];
+    const skill = await parseSkillArchive(zip([
+      { path: "review-change/", content: "" },
+      { path: "review-change/references/", content: "" },
+      { path: "review-change/.DS_Store", content: "metadata" },
+      ...files.flatMap((file) => [
+        file,
+        { path: `__MACOSX/${file.path}`, content: "metadata" },
+      ]),
+    ]));
+    assertSkill(skill);
+    expect(skill.files).toHaveLength(fileCount);
+    expect(skill.files.map((file) => file.path).sort()).toEqual(
+      files.map((file) => file.path.slice("review-change/".length)).sort(),
+    );
+  });
+
+  it("rejects more than the allowed number of non-metadata files", async () => {
+    await expect(parseSkillArchive(zip([
+      { path: "SKILL.md", content: markdown },
+      ...Array.from({ length: MAX_SKILL_ARCHIVE_FILES }, (_, index) => ({
+        path: `references/${index}.md`,
+        content: "Reference",
+      })),
+    ]))).resolves.toMatchObject({ code: "too_many_files" });
   });
 
   it("rejects control characters in skill paths", async () => {
@@ -209,7 +254,6 @@ describe("parseSkillImport", () => {
 
   it.each([
     { content: "", code: "invalid_skill_md" },
-    { content: "# Instructions without frontmatter", code: "invalid_skill_md" },
     { content: "---\nname: [invalid\n---\n# Review", code: "invalid_skill_md" },
     { content: markdown.replace("name: review-change\r\n", ""), code: "invalid_skill_md" },
     { content: markdown.replace("description: Review a code change.\r\n", ""), code: "invalid_skill_md" },
@@ -223,6 +267,63 @@ describe("parseSkillImport", () => {
   it("rejects invalid UTF-8", async () => {
     await expect(parseSkillImport("skill.md", new Uint8Array([0xff])))
       .resolves.toMatchObject({ code: "invalid_skill_md", message: "SKILL.md must be valid UTF-8 text." });
+  });
+
+  describe.each(["md", "zip"])("%s review regressions", (extension) => {
+    const importContent = (content: string) => parseSkillImport(
+      `skill.${extension}`,
+      extension === "zip"
+        ? zip([{ path: "review-change/SKILL.md", content }])
+        : new TextEncoder().encode(content),
+    );
+
+    it("recovers an unquoted description containing a colon and preserves the skill", async () => {
+      const content = markdown.replace("description: Review a code change.", "description: Review changes: carefully.");
+      await expect(importContent(content)).resolves.toMatchObject({
+        id: "review-change",
+        name: "review-change",
+        description: "Review changes: carefully.",
+        body: "# Review\r\n\r\nInspect the diff.\r\n",
+        declaredTools: ["mcp:github:submit_review"],
+        interruptOn: { "mcp:github:submit_review": { allowedDecisions: ["approve", "reject"] } },
+        files: [{ path: "SKILL.md", content: new TextEncoder().encode(content) }],
+      });
+    });
+
+    it("reports the YAML error when fallback cannot recover a name", async () => {
+      const content = "---\nmetadata:\n  name: nested-name\ndescription: Review changes: carefully.\n---\n# Review";
+      await expect(importContent(content))
+        .resolves.toMatchObject({
+          code: "invalid_skill_md",
+          message: expect.stringContaining("frontmatter contains invalid YAML: Nested mappings are not allowed"),
+        });
+    });
+
+    it("suggests a hyphenated name without accepting an underscore name", async () => {
+      const content = markdown.replace("name: review-change", "name: my_skill");
+      await expect(importContent(content))
+        .resolves.toMatchObject({
+          code: "invalid_skill_name",
+          message: expect.stringContaining('Try "my-skill" instead.'),
+        });
+    });
+
+    it("reports the actual length of an oversized description", async () => {
+      const content = markdown.replace("description: Review a code change.", `description: ${"a".repeat(1025)}`);
+      await expect(importContent(content))
+        .resolves.toMatchObject({
+          code: "invalid_skill_md",
+          message: "SKILL.md description must be 1-1024 characters; received 1025 characters.",
+        });
+    });
+
+    it("rejects SKILL.md without frontmatter", async () => {
+      await expect(importContent("# Instructions without frontmatter"))
+        .resolves.toMatchObject({
+          code: "invalid_skill_md",
+          message: "SKILL.md frontmatter must include a name.",
+        });
+    });
   });
 
   it("reports a broken ZIP without falling back to Markdown", async () => {

@@ -231,6 +231,41 @@ describe("skill routes", () => {
     });
   });
 
+  it.each(["md", "zip"])("imports malformed YAML from %s and reloads it without rewriting", async (extension) => {
+    const { app, skillsDir } = await realPluginFixture();
+    const content = [
+      "---",
+      "name: imported-review",
+      "description: Review changes: report actionable findings.",
+      "tools:",
+      "  - mcp:mcp-status:get_mcp_status",
+      "interruptOn:",
+      "  mcp:mcp-status:get_mcp_status: true",
+      "---",
+      "# Review",
+    ].join("\n");
+    const form = new FormData();
+    form.set("file", new File([
+      extension === "zip" ? storedZip([{ path: "8a14e7/SKILL.md", content }]) : content,
+    ], `review.${extension}`));
+
+    const response = await app.request("/skills/import", { method: "POST", body: form });
+
+    expect(response.status).toBe(201);
+    const imported = await response.json();
+    expect(imported).toMatchObject({
+      id: "imported-review",
+      description: "Review changes: report actionable findings.",
+      body: "# Review",
+      declaredTools: ["mcp:mcp-status:get_mcp_status"],
+      interruptOn: { "mcp:mcp-status:get_mcp_status": true },
+    });
+    expect(await readFile(join(skillsDir, "imported-review", "SKILL.md"), "utf8")).toBe(content);
+    const loaded = await app.request("/skills/imported-review");
+    expect(loaded.status).toBe(200);
+    expect(await loaded.json()).toEqual(imported);
+  });
+
   it("creates recursive bundle files without flattening their paths", async () => {
     const { app, skillsDir } = await fixture();
     const response = await app.request("/skills", {

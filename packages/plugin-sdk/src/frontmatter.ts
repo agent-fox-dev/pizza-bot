@@ -7,12 +7,10 @@ const FRONTMATTER = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---\r?\n?/;
 export interface Frontmatter {
   readonly data: Record<string, unknown>;
   readonly body: string;
+  readonly error?: string;
 }
 
-/**
- * Splits leading `---`-delimited YAML from its body. A non-mapping or malformed
- * block yields an empty `data` so callers see missing keys, never a throw.
- */
+/** Malformed YAML falls back to top-level fields for compatibility with imported skills. */
 export function splitFrontmatter(markdown: string): Frontmatter {
   const match = FRONTMATTER.exec(markdown);
   if (!match) return { data: {}, body: markdown };
@@ -22,10 +20,27 @@ export function splitFrontmatter(markdown: string): Frontmatter {
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
       data = parsed as Record<string, unknown>;
     }
-  } catch {
-    data = {};
+  } catch (error) {
+    return {
+      data: parseTopLevelFields(match[1]!),
+      body: markdown.slice(match[0].length),
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
   return { data, body: markdown.slice(match[0].length) };
+}
+
+function parseTopLevelFields(yaml: string): Record<string, unknown> {
+  return Object.fromEntries(yaml.split(/(?=^[A-Za-z_][\w-]*:)/m).flatMap((block) => {
+    const field = /^([A-Za-z_][\w-]*):(?:[ \t]+([^\r\n]*)|(?=\r?\n|$))/.exec(block);
+    if (!field) return [];
+    try {
+      return Object.entries(parseYaml(block) as Record<string, unknown>);
+    } catch {
+      const value = field[2]?.trim();
+      return value && !/^[[\]{},&*!|>'"%@`]/.test(value) ? [[field[1]!, value]] : [];
+    }
+  }));
 }
 
 /** Parsed frontmatter keys only; security checks depend on key presence. */
