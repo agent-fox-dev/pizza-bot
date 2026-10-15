@@ -3,7 +3,12 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { homedir, tmpdir } from "node:os";
 import path, { delimiter } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { mergePath, parseMarkedPath, readLoginShellPath } from "./login-shell-path.js";
+import {
+  type LoginShellPathResult,
+  mergePath,
+  parseMarkedPath,
+  readLoginShellPath,
+} from "./login-shell-path.js";
 
 const MARKER = "__PIZZA_LOGIN_SHELL_PATH__";
 const BARE_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
@@ -43,6 +48,14 @@ function scratchHome(name: string, files: Record<string, string>): string {
   return home;
 }
 
+function pathOf(result: LoginShellPathResult): string | undefined {
+  return "path" in result ? result.path : undefined;
+}
+
+function reasonOf(result: LoginShellPathResult): string | undefined {
+  return "reason" in result ? result.reason : undefined;
+}
+
 function entriesOf(value: string | undefined): string[] {
   return value?.split(":") ?? [];
 }
@@ -78,7 +91,7 @@ describe.skipIf(process.platform === "win32")("readLoginShellPath", () => {
       "ok.sh",
       `echo banner; echo ${MARKER}; echo /opt/tools/bin:/usr/bin; echo ${MARKER}`,
     );
-    await expect(readLoginShellPath({ shell })).resolves.toBe("/opt/tools/bin:/usr/bin");
+    expect(pathOf(await readLoginShellPath({ shell }))).toBe("/opt/tools/bin:/usr/bin");
   });
 
   it("returns at the closing marker while a backgrounded job still holds stdout", async () => {
@@ -86,26 +99,31 @@ describe.skipIf(process.platform === "win32")("readLoginShellPath", () => {
       "background.sh",
       `sleep 30 & echo ${MARKER}; echo /opt/tools/bin; echo ${MARKER}`,
     );
-    const started = Date.now();
-    await expect(readLoginShellPath({ shell })).resolves.toBe("/opt/tools/bin");
-    expect(Date.now() - started).toBeLessThan(5_000);
+    const result = await readLoginShellPath({ shell });
+    expect(pathOf(result)).toBe("/opt/tools/bin");
+    expect(result.elapsedMs).toBeLessThan(5_000);
   });
 
   it("gives up on a shell that hangs", async () => {
     const shell = fakeShell("hang.sh", "trap '' TERM; sleep 30");
-    const started = Date.now();
-    await expect(readLoginShellPath({ shell, timeoutMs: 200 })).resolves.toBeUndefined();
-    expect(Date.now() - started).toBeLessThan(5_000);
+    const result = await readLoginShellPath({ shell, timeoutMs: 200 });
+    expect(reasonOf(result)).toBe("timeout");
+    expect(result.elapsedMs).toBeLessThan(5_000);
   });
 
-  it("returns undefined when the shell cannot be spawned", async () => {
-    await expect(
-      readLoginShellPath({ shell: path.join(dir, "missing-shell") }),
-    ).resolves.toBeUndefined();
+  it("reports a shell that exits without printing the markers", async () => {
+    const shell = fakeShell("silent.sh", "echo banner");
+    expect(reasonOf(await readLoginShellPath({ shell }))).toBe("no_markers");
+  });
+
+  it("reports a shell that cannot be spawned", async () => {
+    const result = await readLoginShellPath({ shell: path.join(dir, "missing-shell") });
+    expect(reasonOf(result)).toBe("spawn_error");
   });
 
   it("is a no-op on Windows", async () => {
-    await expect(readLoginShellPath({ platform: "win32", shell: "/bin/sh" })).resolves.toBeUndefined();
+    const result = await readLoginShellPath({ platform: "win32", shell: "/bin/sh" });
+    expect(reasonOf(result)).toBe("unsupported_platform");
   });
 });
 
@@ -114,12 +132,13 @@ const bash = installed("bash");
 const fish = installed("fish");
 
 describe.skipIf(!zsh)("readLoginShellPath with a real zsh", () => {
-  const read = (home: string, timeoutMs?: number) =>
+  const readResult = (home: string, timeoutMs?: number) =>
     readLoginShellPath({
       shell: zsh,
       ...(timeoutMs ? { timeoutMs } : {}),
       spawnShell: withEnv({ HOME: home, ZDOTDIR: home, PATH: BARE_PATH, EXPECTED_PWD: homedir() }),
     });
+  const read = async (home: string) => pathOf(await readResult(home));
 
   it("collects PATH from .zshenv, .zprofile, and .zshrc", async () => {
     const home = scratchHome("zsh-startup-files", {
@@ -167,15 +186,15 @@ describe.skipIf(!zsh)("readLoginShellPath with a real zsh", () => {
 
   it("falls back when .zshrc replaces the shell or never finishes", async () => {
     const execHome = scratchHome("zsh-exec", { ".zshrc": "exec /bin/sh -c 'echo replaced'" });
-    await expect(read(execHome)).resolves.toBeUndefined();
+    expect(reasonOf(await readResult(execHome))).toBe("no_markers");
     const slowHome = scratchHome("zsh-slow", { ".zshrc": "sleep 30" });
-    await expect(read(slowHome, 300)).resolves.toBeUndefined();
+    expect(reasonOf(await readResult(slowHome, 300))).toBe("timeout");
   });
 });
 
 describe.skipIf(!bash)("readLoginShellPath with a real bash", () => {
-  const read = (home: string) =>
-    readLoginShellPath({ shell: bash, spawnShell: withEnv({ HOME: home, PATH: BARE_PATH }) });
+  const read = async (home: string) =>
+    pathOf(await readLoginShellPath({ shell: bash, spawnShell: withEnv({ HOME: home, PATH: BARE_PATH }) }));
 
   it("reads .bashrc when .bash_profile sources it", async () => {
     const home = scratchHome("bash-sourced", {
@@ -205,7 +224,7 @@ describe.skipIf(!fish)("readLoginShellPath with a real fish", () => {
     const home = scratchHome("fish-config", {
       ".config/fish/config.fish": "set -gx PATH /from/fish $PATH",
     });
-    const value = await readLoginShellPath({
+    const result = await readLoginShellPath({
       shell: fish,
       spawnShell: withEnv({
         HOME: home,
@@ -213,6 +232,6 @@ describe.skipIf(!fish)("readLoginShellPath with a real fish", () => {
         PATH: BARE_PATH,
       }),
     });
-    expect(entriesOf(value)).toContain("/from/fish");
+    expect(entriesOf(pathOf(result))).toContain("/from/fish");
   });
 });

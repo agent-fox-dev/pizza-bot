@@ -27,7 +27,7 @@ import { PROTOCOL_VERSION } from "@pizza-bot/core";
 import { isAllowedRendererNavigation } from "./navigation-policy.js";
 import { handleSquirrelStartup, SQUIRREL_APP_ID } from "./squirrel-startup.js";
 import { resolveWindowIconPath } from "./window-icon.js";
-import { mergePath, readLoginShellPath } from "./login-shell-path.js";
+import { type LoginShellPathResult, mergePath, readLoginShellPath } from "./login-shell-path.js";
 import {
   BoundedRetention,
   NATIVE_NOTIFICATION_CHANNELS,
@@ -277,17 +277,23 @@ async function main(): Promise<void> {
   });
 }
 
-async function applyLoginShellPath(pending: Promise<string | undefined>): Promise<void> {
-  const shellPath = await pending;
-  if (!shellPath) {
-    if (process.platform !== "win32") {
+async function applyLoginShellPath(pending: Promise<LoginShellPathResult>): Promise<void> {
+  const result = await pending;
+  if ("reason" in result) {
+    if (result.reason !== "unsupported_platform") {
       shellLogger.warn("Could not read the login shell PATH; keeping the launch PATH", {
         event: "desktop.login_shell_path_unavailable",
+        reason: result.reason,
+        elapsedMs: result.elapsedMs,
       });
     }
     return;
   }
-  process.env.PATH = mergePath(shellPath, process.env.PATH);
+  shellLogger.debug("Read the login shell PATH", {
+    event: "desktop.login_shell_path_read",
+    elapsedMs: result.elapsedMs,
+  });
+  process.env.PATH = mergePath(result.path, process.env.PATH);
 }
 
 function initialConnection(): ActiveConnection | { mode: "local" } {
