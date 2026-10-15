@@ -3,6 +3,7 @@
  * with launchd's bare PATH, so bare stdio MCP commands would otherwise ENOENT.
  */
 import { spawn } from "node:child_process";
+import { homedir } from "node:os";
 import { delimiter } from "node:path";
 
 const MARKER = "__PIZZA_LOGIN_SHELL_PATH__";
@@ -29,26 +30,41 @@ export function readLoginShellPath(opts: LoginShellPathOptions = {}): Promise<st
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      child.stdout?.destroy();
+      child.unref();
       resolve(value);
     };
     // `-i` too: many users extend PATH in .zshrc/.bashrc, which login-only skips.
-    // Markers fence off banners and other rc-file output.
+    // `command` bypasses rc-defined aliases and functions; markers fence off banners.
     const child = spawnShell(
       shell,
-      ["-i", "-l", "-c", `echo ${MARKER}; printenv PATH; echo ${MARKER}`],
-      // Own session, no controlling terminal: an interactive shell launched from a
-      // terminal would otherwise seize that terminal's job control.
-      { stdio: ["ignore", "pipe", "ignore"], detached: true },
+      [
+        "-i",
+        "-l",
+        "-c",
+        `command printf '%s\\n' ${MARKER}; command printenv PATH; command printf '%s\\n' ${MARKER}`,
+      ],
+      {
+        // Version managers resolve global tools relative to the working directory.
+        cwd: homedir(),
+        stdio: ["ignore", "pipe", "ignore"],
+        // Own session, no controlling terminal: an interactive shell launched from a
+        // terminal would otherwise seize that terminal's job control.
+        detached: true,
+      },
     );
-    // Interactive shells ignore SIGTERM; a hung rc file needs SIGKILL. Resolve
-    // regardless, since a backgrounded rc job can hold stdout open past the kill.
+    // Interactive shells ignore SIGTERM; a hung rc file needs SIGKILL.
     const timer = setTimeout(() => {
       killGroup(child.pid);
       finish(undefined);
     }, timeoutMs);
     child.stdout?.setEncoding("utf8");
+    // Resolve on the closing marker, not on exit: a job an rc file backgrounds
+    // inherits stdout and holds the pipe open long after the shell is done.
     child.stdout?.on("data", (chunk: string) => {
       stdout += chunk;
+      const value = parseMarkedPath(stdout);
+      if (value !== undefined) finish(value);
     });
     child.on("error", () => finish(undefined));
     child.on("close", () => finish(parseMarkedPath(stdout)));
