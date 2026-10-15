@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -264,6 +264,40 @@ describe("skill routes", () => {
     const loaded = await app.request("/skills/imported-review");
     expect(loaded.status).toBe(200);
     expect(await loaded.json()).toEqual(imported);
+  });
+
+  it.each([
+    { extension: "md", field: "interruptOn" },
+    { extension: "zip", field: "interruptOn" },
+    { extension: "md", field: "tools" },
+    { extension: "zip", field: "tools" },
+  ])("rejects $extension imports with malformed $field YAML before writing files", async ({ extension, field }) => {
+    const { app, skillsDir } = await realPluginFixture();
+    const content = [
+      "---",
+      "name: hitl-probe",
+      "description: Probe.",
+      field === "interruptOn"
+        ? "tools: [mcp:mcp-status:get_mcp_status]\ninterruptOn:\n  mcp:mcp-status:get_mcp_status: true\n  note: a: b"
+        : "tools: [mcp:mcp-status:get_mcp_status\ninterruptOn:\n  mcp:mcp-status:get_mcp_status: true",
+      "---",
+      "",
+      "# Probe",
+    ].join("\n");
+    const form = new FormData();
+    form.set("file", new File([
+      extension === "zip" ? storedZip([{ path: "hitl-probe/SKILL.md", content }]) : content,
+    ], `probe.${extension}`));
+
+    const response = await app.request("/skills/import", { method: "POST", body: form });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({
+      error: "invalid_skill_md",
+      detail: expect.stringContaining("frontmatter contains invalid YAML:"),
+    });
+    expect(await readdir(skillsDir)).toEqual([]);
+    expect((await app.request("/skills/hitl-probe")).status).toBe(404);
   });
 
   it("creates recursive bundle files without flattening their paths", async () => {

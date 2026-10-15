@@ -75,4 +75,31 @@ describe("parseFrontmatter", () => {
       description: "Review changes: carefully.",
     });
   });
+
+  it.each(["interruptOn", '"interruptOn"', "tools", '"tools"', "metadata"])(
+    "rejects malformed %s blocks instead of recovering a partial skill",
+    (key) => {
+      const md = [
+        "---",
+        "name: hitl-probe",
+        "description: Probe: carefully.",
+        `${key}:`,
+        "  mcp:mcp-status:get_mcp_status: true",
+        "  note: a: b",
+        "---",
+        "# Probe",
+      ].join("\n");
+
+      expect(splitFrontmatter(md)).toMatchObject({
+        data: {},
+        error: expect.stringContaining("Nested mappings are not allowed"),
+      });
+      expect(parseFrontmatter(md)).toEqual({});
+    },
+  );
+
+  it("does not recover malformed tool declarations as plain text", () => {
+    const md = "---\nname: hitl-probe\ndescription: Probe.\ntools: mcp:mcp-status:get_mcp_status: invalid\n---\n# Probe";
+    expect(parseFrontmatter(md)).toEqual({});
+  });
 });

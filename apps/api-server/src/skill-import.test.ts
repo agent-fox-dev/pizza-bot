@@ -299,6 +299,29 @@ describe("parseSkillImport", () => {
         });
     });
 
+    it.each([
+      { field: "interruptOn", description: "Probe." },
+      { field: "interruptOn", description: "Probe: carefully." },
+      { field: "tools", description: "Probe." },
+      { field: "tools", description: "Probe: carefully." },
+    ])("rejects malformed $field with description $description", async ({ field, description }) => {
+      const content = [
+        "---",
+        "name: hitl-probe",
+        `description: ${description}`,
+        field === "interruptOn"
+          ? "tools: [mcp:mcp-status:get_mcp_status]\ninterruptOn:\n  mcp:mcp-status:get_mcp_status: true\n  note: a: b"
+          : "tools: [mcp:mcp-status:get_mcp_status\ninterruptOn:\n  mcp:mcp-status:get_mcp_status: true",
+        "---",
+        "# Probe",
+      ].join("\n");
+
+      await expect(importContent(content)).resolves.toMatchObject({
+        code: "invalid_skill_md",
+        message: expect.stringContaining("frontmatter contains invalid YAML:"),
+      });
+    });
+
     it("suggests a hyphenated name without accepting an underscore name", async () => {
       const content = markdown.replace("name: review-change", "name: my_skill");
       await expect(importContent(content))
