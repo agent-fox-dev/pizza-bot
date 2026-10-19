@@ -23,7 +23,9 @@ declarative bundles that contribute two resource kinds:
   convert to LangChain tools the runtime consumes directly. String fields expand
   `${CLAUDE_PLUGIN_ROOT}`/`${PLUGIN_ROOT}` (the plugin's on-disk dir) and
   `${ENV_VAR}` (from the environment) at load time, so secrets stay out of the
-  committed manifest. Set `enabled: false` on an entry to ship it disabled.
+  committed manifest. Set `enabled: false` on an entry to ship it disabled;
+  skills that depend on it stay off until the user enables the server, unless
+  the user has toggled the skill itself.
 - **Agent Skills** — one `SKILL.md` per capability under `skills/<id>/`. The
   runtime compiles each into a tool-scoped worker only after all of its declared
   tools are ready. See [../skills/README.md](../skills/README.md).
